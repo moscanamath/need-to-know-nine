@@ -1861,7 +1861,9 @@ function genG3(tid,tier,big){
       const n=r(1000,max);return tq(`Write ${n} in expanded form.\n(e.g. 1000+200+30+4)`,n.toString().split('').reverse().map((d,i)=>Number(d)*Math.pow(10,i)).filter(v=>v>0).reverse().join('+'),'none');
     }
     case 't1':{ // Fractions
-      const den=pick([2,3,4,6,8,10][tier<2?[0,1,2]:[tier<4?[0,1,2,3,4]:[0,1,2,3,4,5]]]);
+      // AUDIT FIX: removed a dead-code line here that indexed an array with
+      // another array (nonsensical in JS) and crashed the whole function —
+      // it computed a value ("den") that was never actually used below.
       const safeD=pick([[2,3,4],[2,3,4,6],[2,3,4,6,8],[2,3,4,6,8,10],[2,3,4,6,8,10,12]][tier]);
       const num=r(1,safeD-1);
       if(tier<3){return fracq(`What fraction of the circle is shaded?`,`${num}/${safeD}`,num,safeD,false);}
@@ -1928,7 +1930,7 @@ function genG4(tid,tier,big){
       return tq(`What is the value of the digit ${String(n)[1]} in ${n.toLocaleString()}?`,String(Number(String(n)[1])*Math.pow(10,String(n).length-2)),'none');
     }
     case 't1':{ // Fractions & decimals
-      const den=pick([2,4,5,8,10,100][tier<=1?[0,1,2]:[tier<=3?[0,1,2,3]:[0,1,2,3,4]]]);
+      // AUDIT FIX: same dead-code crash bug as Grade 3's t1 — removed.
       const safeD=[[2,4,5],[2,4,5,8],[2,4,5,8,10],[4,5,10,100],[5,10,100]][Math.min(tier,4)];
       const d=pick(safeD),num=r(1,d-1);
       if(tier<3){return fracq(`What fraction of the circle is shaded?`,`${num}/${d}`,num,d,false);}
@@ -2176,7 +2178,17 @@ function genG8(tid,tier,big){
     case 't2':{ // Linear equations
       const a=r(2,9),c=r(2,10),b=r(1,15);
       if(tier<2)return tq(`Solve: ${a}x + ${b} = ${a*c+b}`,`x = ${c}`,'none');
-      const d=r(1,6);return tq(`Solve: ${a}x + ${b} = ${d}x + ${b+r(1,20)}`,`x = ${Math.round((b+r(1,20)-b)/(a-d))||2}`,'none');
+      // AUDIT FIX: the old version called r(1,20) twice — once building the
+      // displayed equation, once computing the "answer" — so the equation
+      // shown and the equation solved were two different random problems.
+      // ~90% of generated problems had a wrong answer key as a result.
+      // Now: pick x and d first, then derive the RHS constant that actually
+      // makes x the true solution.
+      let d=r(1,6); while(d===a) d=r(1,6);
+      const x=r(1,10);
+      const rhsConst=(a-d)*x+b;
+      const rhsStr=rhsConst>=0?`+ ${rhsConst}`:`- ${Math.abs(rhsConst)}`;
+      return tq(`Solve: ${a}x + ${b} = ${d}x ${rhsStr}`,`x = ${x}`,'none');
     }
     case 't3':{ // Pythagorean theorem
       const triples=[[3,4,5],[5,12,13],[6,8,10],[8,15,17],[9,40,41],[7,24,25]];
@@ -2207,9 +2219,17 @@ function genG8(tid,tier,big){
       return tq(`Simple interest:\nP=$${p}, r=${rate}%, t=${years} years\nInterest = P × r × t`,`$${(p*rate/100*years).toFixed(2)}`,'none');
     }
     case 't8':{ // Multi-step equations
-      const a=r(2,6),b=r(1,10),c=r(1,6),d=r(1,10);
+      // AUDIT FIX: same class of bug as t2 above, plus no guard against a===c
+      // (which made the equation unsolvable — "5x+3 = 5x+43" has no x that
+      // works at all, yet the old code still printed a confident fake answer).
+      // Now: pick a, c (guaranteed different), b, and the target x first,
+      // then derive the RHS constant that actually makes x the true solution.
+      const a=r(2,6); let c=r(1,6); while(c===a) c=r(1,6);
+      const b=r(1,10);
       const x=r(1,8);
-      return tq(`Solve:\n${a}x + ${b} = ${c}x + ${c*x+b-(a-c)*x+d}`,`x = ${x}`,'none');
+      const rhsConst=(a-c)*x+b;
+      const rhsStr=rhsConst>=0?`+ ${rhsConst}`:`- ${Math.abs(rhsConst)}`;
+      return tq(`Solve:\n${a}x + ${b} = ${c}x ${rhsStr}`,`x = ${x}`,'none');
     }
   }
   return null;
@@ -2886,10 +2906,16 @@ const saveS=st=>{
     if(!resp.ok)return;
     const serverState=await resp.json();
     const local=getS();
+    // AUDIT FIX: server data now wins over local on overlapping keys (was
+    // reversed before — a device with a stale local cache would silently
+    // clobber newer data another device had already saved to the shared
+    // backend). Local values only fill in for entries the server doesn't
+    // have yet (e.g. something created on this device moments ago, before
+    // its own save had a chance to reach the server).
     const merged={
-      students:{...(serverState.students||{}),...(local.students||{})},
-      teacherEmails:{...(serverState.teacherEmails||{}),...(local.teacherEmails||{})},
-      teacherCodes:{...(serverState.teacherCodes||{}),...(local.teacherCodes||{})},
+      students:{...(local.students||{}),...(serverState.students||{})},
+      teacherEmails:{...(local.teacherEmails||{}),...(serverState.teacherEmails||{})},
+      teacherCodes:{...(local.teacherCodes||{}),...(serverState.teacherCodes||{})},
       _cur:local._cur
     };
     localStorage.setItem(KEY,JSON.stringify(merged));
