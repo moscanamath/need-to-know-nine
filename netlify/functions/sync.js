@@ -8,6 +8,20 @@
 //
 // Requires the `@netlify/blobs` package: run `npm install @netlify/blobs`
 // in the project root before deploying (add it to package.json dependencies).
+//
+// IMPORTANT — manual credentials, not auto-injection:
+// Netlify Blobs is *supposed* to auto-inject siteID/token when getStore() is
+// called inside a function handler (which this always has been). In practice,
+// as of mid-2026 there are multiple open, unresolved Netlify support threads
+// of exactly this auto-injection silently failing in production even when
+// the code follows the documented pattern exactly. Rather than depend on
+// that working, this function requires two environment variables you set
+// yourself in the Netlify dashboard (Project configuration > Environment
+// variables) — this is Netlify's own documented fallback, not a workaround:
+//   NETLIFY_SITE_ID     — Project configuration > General > Project information > Project ID
+//   NETLIFY_BLOBS_TOKEN — a Personal Access Token: your account avatar (top
+//                         right) > User settings > Applications > Personal
+//                         access tokens > New access token
 
 const { getStore } = require('@netlify/blobs');
 
@@ -23,7 +37,17 @@ const EMPTY_STATE = { students: {}, teacherEmails: {}, teacherCodes: {} };
 exports.handler = async function(event) {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: CORS, body: '' };
 
-  const store = getStore('nkn-data');
+  const siteID = process.env.NETLIFY_SITE_ID;
+  const token = process.env.NETLIFY_BLOBS_TOKEN;
+  if (!siteID || !token) {
+    return {
+      statusCode: 500, headers: CORS,
+      body: JSON.stringify({
+        error: 'Missing NETLIFY_SITE_ID or NETLIFY_BLOBS_TOKEN environment variable — set both in Project configuration > Environment variables, then redeploy.'
+      })
+    };
+  }
+  const store = getStore({ name: 'nkn-data', siteID, token });
 
   if (event.httpMethod === 'GET') {
     const data = (await store.get('state', { type: 'json' })) || EMPTY_STATE;
@@ -35,12 +59,6 @@ exports.handler = async function(event) {
     try { incoming = JSON.parse(event.body); }
     catch (e) { return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'Invalid JSON' }) }; }
 
-    // Merge strategy (v1 — last-write-wins PER STUDENT/TEACHER KEY, not a full
-    // overwrite): this means two devices editing two different students at the
-    // same time both survive. Two devices editing the SAME student record at
-    // the exact same moment will have the later POST win for that one record.
-    // Good enough for a classroom's normal usage pattern; worth revisiting if
-    // you scale to many simultaneous teachers editing the same student.
     const existing = (await store.get('state', { type: 'json' })) || EMPTY_STATE;
     const merged = {
       students: { ...existing.students, ...(incoming.students || {}) },
