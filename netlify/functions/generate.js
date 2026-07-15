@@ -1,5 +1,14 @@
 const https = require('https');
 
+// Model name used for both problem generation and grading.
+// FLAGGED FOR REVIEW: the code previously hardcoded 'claude-sonnet-4-5' in
+// two places. As of mid-2026 that string doesn't match any currently
+// documented model name — defaulting to 'claude-sonnet-5' instead, since
+// that's a current, valid model. Overridable via the MODEL_NAME environment
+// variable (Project configuration > Environment variables) with no code
+// change needed if this needs adjusting again.
+const MODEL = process.env.MODEL_NAME || 'claude-sonnet-5';
+
 function callAnthropic(payload) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(payload);
@@ -46,14 +55,12 @@ exports.handler = async function(event) {
   try { body = JSON.parse(event.body); }
   catch(e) { return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'Invalid JSON' }) }; }
 
-  // Route: generate problem OR grade handwriting
   const route = body.route || 'problem';
 
   try {
     if (route === 'grade') {
-      // Grade handwritten work from image
       const { image, question, answer, level, topic, messyAttempt } = body;
-      
+
       const systemPrompt = `You are grading handwritten math work for Need to Know Nine, a K-Calculus math app.
 You will receive an image of a student's handwritten answer to a math problem.
 
@@ -104,7 +111,7 @@ Accept the sum written anywhere. "5" for 3+2 even if written imperfectly.
 
 ═══ SYMBOL DISAMBIGUATION ═══
 - "1" vs "l" vs "I" — use context
-- "6" vs "b" — use context  
+- "6" vs "b" — use context
 - "2" vs "Z" — use context
 - "5" vs "S" — use context
 
@@ -150,25 +157,26 @@ Grade this student's handwritten work.`
       ];
 
       const data = await callAnthropic({
-        model: 'claude-sonnet-4-5',
+        model: MODEL,
         max_tokens: 400,
         system: systemPrompt,
         messages: [{ role: 'user', content: userContent }]
       });
 
+      if (data.error) throw new Error('Anthropic API error: ' + (data.error.message || JSON.stringify(data.error)));
       const raw = (data.content||[]).map(c=>c.text||'').join('');
       const match = raw.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error('No JSON in grade response');
+      if (!match) throw new Error('No JSON in grade response. Raw model output: ' + raw.substring(0,300));
       return { statusCode: 200, headers: CORS, body: match[0] };
 
     } else {
-      // Generate a problem
       const data = await callAnthropic({
-        model: 'claude-sonnet-4-5',
+        model: MODEL,
         max_tokens: body.max_tokens || 600,
         system: body.system || '',
         messages: body.messages || []
       });
+      if (data.error) throw new Error('Anthropic API error: ' + (data.error.message || JSON.stringify(data.error)));
       return { statusCode: 200, headers: CORS, body: JSON.stringify(data) };
     }
   } catch(err) {
