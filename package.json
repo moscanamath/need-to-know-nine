@@ -1,0 +1,8 @@
+{
+  "name": "need-to-know-nine",
+  "private": true,
+  "description": "Need to Know Nine — the math helper. Netlify Functions backend.",
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0"
+  }
+}

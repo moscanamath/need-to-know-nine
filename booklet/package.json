@@ -1,0 +1,8 @@
+{
+  "name": "nkn-booklet-builder",
+  "private": true,
+  "description": "Generates a printable Need to Know Nine booklet with QR codes, pulling problems directly from the live app's index.html so labels can never drift from content.",
+  "dependencies": {
+    "qrcode": "^1.5.3"
+  }
+}

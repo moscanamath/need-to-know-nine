@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Need to Know Nine — Scan &amp; Grade</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:system-ui,sans-serif;background:#f8f7f4;color:#1a1a1a;min-height:100vh;padding:1.25rem;}
+.wrap{max-width:480px;margin:0 auto;}
+.card{background:#fff;border:.5px solid #e0ddd6;border-radius:14px;padding:1.25rem;margin-bottom:1rem;}
+h1{font-size:16px;font-weight:700;margin-bottom:.75rem;}
+.q{font-size:17px;line-height:1.6;white-space:pre-line;margin-bottom:.5rem;}
+.meta{font-size:12px;color:#888;margin-bottom:1rem;}
+label{font-size:13px;font-weight:600;color:#555;display:block;margin-bottom:6px;margin-top:12px;}
+input[type=text]{width:100%;padding:10px 12px;font-size:15px;border:1px solid #d0cdc6;border-radius:10px;background:#fafaf8;}
+.btn{display:block;width:100%;padding:12px;font-size:15px;font-weight:700;border-radius:10px;cursor:pointer;border:none;background:#2d6a0a;color:#fff;text-align:center;margin-top:14px;}
+.btn:disabled{background:#ccc;cursor:default;}
+.btn.sec{background:#fff;border:1px solid #d0cdc6;color:#444;}
+#preview{max-width:100%;border-radius:10px;margin-top:10px;display:none;}
+.result{border-radius:12px;padding:1rem;margin-top:1rem;font-size:14px;line-height:1.6;}
+.result.correct{background:#e8f5e0;border:1px solid #5a9e20;}
+.result.wrong{background:#fff8f5;border:1px solid #e8d0c0;}
+.result.human{background:#ffeaea;border:1px solid #e8a0a0;}
+.spin{width:24px;height:24px;border:3px solid #e0ddd6;border-top-color:#5a9e20;border-radius:50%;animation:spin .7s linear infinite;margin:10px auto;}
+@keyframes spin{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>Need to Know Nine — Printed Problem</h1>
+    <div class="meta" id="metaLine">Loading…</div>
+    <div class="q" id="qText"></div>
+
+    <div id="formArea">
+      <label for="sName">Student name</label>
+      <input type="text" id="sName" placeholder="First and last name">
+      <label for="sCode">Class code</label>
+      <input type="text" id="sCode" placeholder="Ask your teacher" autocapitalize="none">
+      <label for="fileInput">Photo of the written answer</label>
+      <input type="file" id="fileInput" accept="image/*" capture="environment">
+      <img id="preview">
+      <button class="btn" id="submitBtn" disabled onclick="submitScan()">Grade this problem</button>
+    </div>
+
+    <div id="loadingArea" style="display:none;text-align:center;">
+      <div class="spin"></div>
+      <div style="font-size:13px;color:#666;">Grading…</div>
+    </div>
+
+    <div id="resultArea"></div>
+  </div>
+</div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const grade = params.get('g') || '';
+const day = params.get('d') || '1';
+const box = params.get('b') || 't0';
+const question = decodeURIComponent(params.get('q') || '');
+const answer = decodeURIComponent(params.get('a') || '');
+let imageDataUrl = null;
+
+document.getElementById('metaLine').textContent = `Grade ${grade} · Day ${day} · Box ${box}`;
+document.getElementById('qText').textContent = question || '(No question found in this QR code — ask your teacher for a new printout.)';
+
+document.getElementById('fileInput').addEventListener('change', function(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(ev){
+    imageDataUrl = ev.target.result;
+    const img = document.getElementById('preview');
+    img.src = imageDataUrl;
+    img.style.display = 'block';
+    checkReady();
+  };
+  reader.readAsDataURL(file);
+});
+document.getElementById('sName').addEventListener('input', checkReady);
+document.getElementById('sCode').addEventListener('input', checkReady);
+
+function checkReady(){
+  const ready = imageDataUrl && document.getElementById('sName').value.trim() && document.getElementById('sCode').value.trim();
+  document.getElementById('submitBtn').disabled = !ready;
+}
+
+async function submitScan(){
+  const name = document.getElementById('sName').value.trim();
+  const code = document.getElementById('sCode').value.trim().toUpperCase();
+  document.getElementById('formArea').style.display = 'none';
+  document.getElementById('loadingArea').style.display = 'block';
+
+  let grade_result;
+  try{
+    const resp = await fetch('/.netlify/functions/generate', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        route: 'grade',
+        image: imageDataUrl,
+        question, answer,
+        level: grade,
+        topic: box,
+        messyAttempt: 0
+      })
+    });
+    const raw = await resp.text();
+    const match = raw.match(/\{[\s\S]*\}/);
+    grade_result = match ? JSON.parse(match[0]) : { legible:false, correct:null, feedback:'Could not read the response — try again.' };
+  }catch(e){
+    grade_result = { legible:false, correct:null, feedback:'Network error grading this — try again: ' + e.message };
+  }
+
+  document.getElementById('loadingArea').style.display = 'none';
+  renderResult(grade_result);
+
+  // Record into shared storage (Netlify Blobs via sync.js) so this shows up
+  // in the teacher/student portal alongside digital-app work. This is a
+  // first pass: it records the booklet submission itself (question, image,
+  // grade result) under `bookletWork` for that student. It does NOT yet
+  // replicate the full mastery-tier / streak / level-up logic from the main
+  // app's updCur() — that's a follow-on step, not done here, so a booklet
+  // submission won't advance a student's day/tier the way a digital answer
+  // does yet.
+  try{
+    const key = (code + '_' + name).toLowerCase().replace(/\s+/g,'_');
+    const getResp = await fetch('/.netlify/functions/sync', { method: 'GET' });
+    const state = getResp.ok ? await getResp.json() : { students:{}, teacherEmails:{}, teacherCodes:{} };
+    if(!state.students[key]){
+      state.students[key] = { name, code, level: grade, day: 1, streak: 0, bookletWork: {} };
+    }
+    if(!state.students[key].bookletWork) state.students[key].bookletWork = {};
+    const dayKey = 'day' + day;
+    if(!state.students[key].bookletWork[dayKey]) state.students[key].bookletWork[dayKey] = {};
+    state.students[key].bookletWork[dayKey][box] = {
+      question, answer, image: imageDataUrl,
+      correct: grade_result.correct, feedback: grade_result.feedback,
+      teacherNote: grade_result.teacherNote, ts: Date.now()
+    };
+    await fetch('/.netlify/functions/sync', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ students: { [key]: state.students[key] } })
+    });
+  }catch(e){ /* grading result is still shown to the student even if the portal save fails */ }
+}
+
+function renderResult(g){
+  const el = document.getElementById('resultArea');
+  const cls = g.correct === true ? 'correct' : (g.legible === false ? 'human' : 'wrong');
+  el.innerHTML = `<div class="result ${cls}">
+    <div style="font-weight:700;margin-bottom:.3rem;">${g.correct === true ? 'Correct!' : (g.legible === false ? 'Needs a clearer photo or teacher check' : 'Not quite')}</div>
+    <div>${g.feedback || ''}</div>
+  </div>
+  <button class="btn sec" onclick="location.reload()">Scan another problem</button>`;
+}
+</script>
+</body>
+</html>
