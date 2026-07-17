@@ -51,14 +51,28 @@ select,button{font-size:14px;padding:8px 12px;border-radius:8px;border:1px solid
       </div>
       <div>
         <label>Players</label>
-        <select id="playerCount">
+        <select id="playerCount" onchange="onModeChange()">
           <option value="1">Just me (vs. Computer)</option>
           <option value="2" selected>2 players (pass the device)</option>
           <option value="3">3 players (pass the device)</option>
+          <option value="online">Play someone online (classmate, teacher, parent, or tutor)</option>
         </select>
       </div>
     </div>
-    <button class="btn" onclick="startGame()">Start game</button>
+    <button class="btn" id="startLocalBtn" onclick="startGame()">Start game</button>
+
+    <div id="onlineSetup" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid #e0ddd6;">
+      <div class="row">
+        <input type="text" id="onlineName" placeholder="Your name" style="flex:1;min-width:140px;padding:8px 10px;border-radius:8px;border:1px solid #d0cdc6;">
+      </div>
+      <div class="row">
+        <button class="btn" onclick="createRoom()">Create a room</button>
+        <span style="color:#888;font-size:13px;">— or —</span>
+        <input type="text" id="joinCodeInput" placeholder="Enter room code" maxlength="5" style="width:120px;text-transform:uppercase;padding:8px 10px;border-radius:8px;border:1px solid #d0cdc6;">
+        <button class="btn sec" onclick="joinRoom()">Join</button>
+      </div>
+      <div id="onlineStatusMsg" style="font-size:13px;color:#666;margin-top:6px;"></div>
+    </div>
   </div>
 
   <div class="board" id="board">
@@ -70,7 +84,7 @@ select,button{font-size:14px;padding:8px 12px;border-radius:8px;border:1px solid
     </div>
     <div class="log" id="logLine"></div>
     <div class="row" style="justify-content:center;">
-      <button class="btn sec" onclick="resetToSetup()">New game</button>
+      <button class="btn sec" onclick="onlineRoom ? resetOnline() : resetToSetup()">New game</button>
     </div>
   </div>
 
@@ -78,10 +92,6 @@ select,button{font-size:14px;padding:8px 12px;border-radius:8px;border:1px solid
 </div>
 
 <script>
-// ── Deck definitions ──────────────────────────────────────────────────
-// Each deck: 4 categories x 10 cards (values 1-10) + 8 Junk + 4 Wild = 52.
-// Add more decks here (or split into separate files) as Susie shares them —
-// the game engine below never changes, only this data does.
 const DECKS = {
   elementary_sample: {
     title: 'Elementary — Money, Ten Frame, Mental Math, Time',
@@ -111,7 +121,6 @@ const DECKS = {
   }
 };
 
-// ── Engine state ──────────────────────────────────────────────────────
 let state = null;
 
 function populateDeckSelect(){
@@ -128,7 +137,6 @@ function buildShuffledDeck(deckKey){
   });
   for(let i=0;i<8;i++) cards.push({display:'JUNK', value:null, kind:'junk'});
   for(let i=0;i<4;i++) cards.push({display:'WILD', value:null, kind:'wild'});
-  // shuffle (Fisher-Yates)
   for(let i=cards.length-1;i>0;i--){
     const j = Math.floor(Math.random()*(i+1));
     [cards[i],cards[j]] = [cards[j],cards[i]];
@@ -215,22 +223,17 @@ function render(){
 
 function log(msg){ document.getElementById('logLine').textContent = msg; }
 
-// ── Human turn ──────────────────────────────────────────────────────────
-// The student — not the code — determines the value and picks the spot.
-// A wrong placement (bad math OR the right math but the wrong click) is
-// logged as a miss and still ends the turn, exactly like a real bust.
 function drawCard(){
   if(!state || state.gameOver) return;
   const player = state.players[state.current];
   if(player.isComputer) return;
-  if(state.currentDrawn) return; // must answer the current card first
+  if(state.currentDrawn) return;
   if(state.drawPile.length === 0) reshuffleJunkIntoDraw();
   if(state.drawPile.length === 0){ log('No cards left anywhere — start a new game.'); return; }
 
   const card = state.drawPile.pop();
 
   if(card.kind === 'junk'){
-    // Junk is an automatic bust — nothing to solve, no choice to make.
     state.junkPile.push(card);
     log(`Junk! ${player.name}'s turn ends.`);
     render();
@@ -247,7 +250,7 @@ function drawCard(){
 
 function chooseSlot(playerIdx, slotIdx){
   if(!state || state.gameOver) return;
-  if(playerIdx !== state.current) return; // can only answer your own board, on your turn
+  if(playerIdx !== state.current) return;
   const player = state.players[state.current];
   if(player.isComputer || !state.currentDrawn) return;
 
@@ -255,7 +258,7 @@ function chooseSlot(playerIdx, slotIdx){
   const slot = player.slots[slotIdx];
 
   if(card.kind === 'wild'){
-    if(slot.revealed) return; // must choose an open spot
+    if(slot.revealed) return;
     slot.revealed = true;
     slot.card = { display: 'WILD', value: null };
     state.currentDrawn = null;
@@ -265,7 +268,6 @@ function chooseSlot(playerIdx, slotIdx){
     return;
   }
 
-  // Number card: correct only if this is the right value AND the spot was open.
   if(!slot.revealed && slotIdx === card.value - 1){
     slot.revealed = true;
     slot.card = card;
@@ -276,7 +278,6 @@ function chooseSlot(playerIdx, slotIdx){
     return;
   }
 
-  // Miss — note it, discard the card, end the turn.
   player.mistakes = (player.mistakes || 0) + 1;
   state.junkPile.push(card);
   state.currentDrawn = null;
@@ -288,10 +289,6 @@ function chooseSlot(playerIdx, slotIdx){
   endTurnAndContinue();
 }
 
-// ── Computer turn (single-player mode's "Player 2") ─────────────────────
-// The computer always computes the correct value — it plays the role of
-// a competitive opponent, not a tutor, so the student's own math is what's
-// actually being tested.
 function computerTakeTurn(){
   if(!state || state.gameOver) return;
   const player = state.players[state.current];
@@ -358,6 +355,179 @@ function endTurnAndContinue(){
   render();
   const next = state.players[state.current];
   if(next.isComputer) computerTakeTurn();
+}
+
+let onlineRoom = null;
+let myPlayerIndex = null;
+let pollTimer = null;
+
+function onModeChange(){
+  const mode = document.getElementById('playerCount').value;
+  document.getElementById('onlineSetup').style.display = mode === 'online' ? 'block' : 'none';
+  document.getElementById('startLocalBtn').style.display = mode === 'online' ? 'none' : 'block';
+}
+
+async function createRoom(){
+  const name = document.getElementById('onlineName').value.trim() || 'Player 1';
+  const deckKey = document.getElementById('deckSelect').value;
+  setOnlineStatus('Creating room…');
+  try{
+    const resp = await fetch('/.netlify/functions/junkroom', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ action:'create', name, deckDef: DECKS[deckKey] })
+    });
+    const room = await resp.json();
+    if(room.error){ setOnlineStatus('Error: ' + room.error); return; }
+    onlineRoom = room; myPlayerIndex = 0;
+    setOnlineStatus(`Room code: ${room.code} — share this with whoever you're playing. Waiting for them to join…`);
+    enterOnlineBoard();
+    startPolling();
+  }catch(e){ setOnlineStatus('Network error creating room: ' + e.message); }
+}
+
+async function joinRoom(){
+  const name = document.getElementById('onlineName').value.trim() || 'Player 2';
+  const code = document.getElementById('joinCodeInput').value.trim().toUpperCase();
+  if(!code){ setOnlineStatus('Enter a room code first.'); return; }
+  setOnlineStatus('Joining room…');
+  try{
+    const resp = await fetch('/.netlify/functions/junkroom', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ action:'join', code, name })
+    });
+    const room = await resp.json();
+    if(room.error){ setOnlineStatus('Error: ' + room.error); return; }
+    onlineRoom = room; myPlayerIndex = room.players.length - 1;
+    enterOnlineBoard();
+    startPolling();
+  }catch(e){ setOnlineStatus('Network error joining room: ' + e.message); }
+}
+
+function setOnlineStatus(msg){ document.getElementById('onlineStatusMsg').textContent = msg; }
+
+function enterOnlineBoard(){
+  document.getElementById('setupArea').style.display = 'none';
+  document.getElementById('board').classList.add('active');
+  document.getElementById('winnerArea').style.display = 'none';
+  renderOnline();
+}
+
+function startPolling(){
+  if(pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    if(!onlineRoom || onlineRoom.status === 'done') return;
+    try{
+      const resp = await fetch('/.netlify/functions/junkroom?code=' + onlineRoom.code);
+      if(!resp.ok) return;
+      const room = await resp.json();
+      if(room.error) return;
+      if(room.version !== onlineRoom.version){
+        onlineRoom = room;
+        renderOnline();
+        if(room.status === 'done') clearInterval(pollTimer);
+      }
+    }catch(e){}
+  }, 1500);
+}
+
+async function onlineDrawCard(){
+  if(!onlineRoom || onlineRoom.status !== 'playing') return;
+  if(onlineRoom.turn !== myPlayerIndex) return;
+  if(onlineRoom.currentDraw) return;
+  try{
+    const resp = await fetch('/.netlify/functions/junkroom', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ action:'draw', code: onlineRoom.code, playerIndex: myPlayerIndex })
+    });
+    const room = await resp.json();
+    if(room.error){ setOnlineStatus('Error: ' + room.error); return; }
+    onlineRoom = room;
+    renderOnline();
+  }catch(e){ setOnlineStatus('Network error: ' + e.message); }
+}
+
+async function onlineChooseSlot(playerIdx, slotIdx){
+  if(!onlineRoom || onlineRoom.turn !== myPlayerIndex) return;
+  if(playerIdx !== myPlayerIndex) return;
+  if(!onlineRoom.currentDraw) return;
+  try{
+    const resp = await fetch('/.netlify/functions/junkroom', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ action:'answer', code: onlineRoom.code, playerIndex: myPlayerIndex, slotIndex: slotIdx })
+    });
+    const room = await resp.json();
+    if(room.error){ setOnlineStatus('Error: ' + room.error); return; }
+    onlineRoom = room;
+    renderOnline();
+    if(room.status === 'done') showOnlineWinner();
+  }catch(e){ setOnlineStatus('Network error: ' + e.message); }
+}
+
+function renderOnline(){
+  if(!onlineRoom) return;
+  const room = onlineRoom;
+  const area = document.getElementById('playersArea');
+
+  if(room.players.length < 2){
+    area.innerHTML = `<div class="player-board"><div class="player-name">Waiting for a second player to join with the room code above…</div></div>`;
+  } else {
+    area.innerHTML = room.players.map((p, idx) => {
+      const isMyTurnHere = (idx === room.turn) && idx === myPlayerIndex && !!room.currentDraw;
+      return `
+      <div class="player-board">
+        <div class="player-name ${idx===room.turn?'turn':''}">${p.name}${idx===myPlayerIndex?' (you)':''}${idx===room.turn?' — turn now':''}
+          <span style="font-size:11px;color:#888;font-weight:400;">${p.slots.filter(s=>s.revealed).length}/10 revealed <span class="mistakes">${p.mistakes?('· '+p.mistakes+' miss'+(p.mistakes>1?'es':'')):''}</span></span>
+        </div>
+        <div class="slots">
+          ${p.slots.map((s,i) => `
+            <div class="slot ${s.revealed?'face-up':''} ${isMyTurnHere?'clickable':''}" ${isMyTurnHere?`onclick="onlineChooseSlot(${idx},${i})"`:''}>
+              <div class="pos">${i+1}</div>
+              ${s.revealed ? `<div class="content">${s.card.display.replace(/\n/g,'<br>')}</div>` : ''}
+            </div>`).join('')}
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  document.getElementById('drawCount').textContent = room.deck.length;
+  document.getElementById('junkPileDisplay').innerHTML = `Junk pile<br>(${room.junkPile.length})`;
+  document.getElementById('drawPileDisplay').onclick = onlineDrawCard;
+
+  const cc = document.getElementById('currentCard');
+  if(room.currentDraw){
+    cc.style.display='flex';
+    cc.innerHTML = room.currentDraw.display.replace(/\n/g,'<br>');
+  } else {
+    cc.style.display='none';
+  }
+
+  if(room.players.length < 2){
+    document.getElementById('logLine').textContent = 'Share the room code with whoever you\'re playing to begin.';
+  } else if(room.turn === myPlayerIndex){
+    document.getElementById('logLine').textContent = room.currentDraw ? 'Your turn — work it out and click your answer.' : 'Your turn — tap the draw pile.';
+  } else {
+    document.getElementById('logLine').textContent = `Waiting on ${room.players[room.turn].name}…`;
+  }
+
+  if(room.status === 'done') showOnlineWinner();
+}
+
+function showOnlineWinner(){
+  document.getElementById('board').classList.remove('active');
+  const winnerArea = document.getElementById('winnerArea');
+  winnerArea.style.display = 'block';
+  const winnerName = onlineRoom.players[onlineRoom.winnerIdx].name;
+  winnerArea.innerHTML = `🎉 ${winnerName} wins — all 10 flipped! <br><button class="btn sec" style="margin-top:1rem;" onclick="resetOnline()">New game</button>`;
+  if(pollTimer) clearInterval(pollTimer);
+}
+
+function resetOnline(){
+  onlineRoom = null; myPlayerIndex = null;
+  if(pollTimer) clearInterval(pollTimer);
+  document.getElementById('setupArea').style.display = 'block';
+  document.getElementById('board').classList.remove('active');
+  document.getElementById('winnerArea').style.display = 'none';
+  setOnlineStatus('');
 }
 </script>
 </body>
