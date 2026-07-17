@@ -405,6 +405,7 @@ svg.vis{display:block;margin:0 auto;;max-width:100%;overflow:hidden;}
     <span id="attemptLabel">Attempt 1 of 3</span>
     <span id="messyLabel" style="display:none;"></span>
   </div>
+  <button id="teachMeBtn" class="btn sec" style="margin-bottom:10px;" onclick="teachMeThisOne()">🎓 Teach me this one</button>
   <div class="draw-toolbar" id="drawToolbar">
     <span class="tlabel">Draw:</span>
     <div class="pswatch active" style="background:#1a1a1a;" data-c="#1a1a1a" onclick="setPen(this)" title="Black"></div>
@@ -445,6 +446,18 @@ svg.vis{display:block;margin:0 auto;;max-width:100%;overflow:hidden;}
   </div>
   <div id="gradeResult" style="display:none;margin-top:8px;"></div>
   <div id="tutorWrap" style="display:none;margin-top:10px;"></div>
+  <div id="tutorTyping" class="tutor-typing" style="display:none;">
+    <span class="tutor-dot"></span><span class="tutor-dot"></span><span class="tutor-dot"></span>
+  </div>
+  <div id="tutorInputArea" style="display:none;margin-top:8px;">
+    <button class="btn" onclick="sendTutorWork()">I tried it — check my work</button>
+  </div>
+  <button id="tutorDoneBtn" class="btn" style="display:none;margin-top:8px;" onclick="tutorReadyToTry()">Try the problem on your own now</button>
+  <div id="tutorTeachMeControls" style="display:none;margin-top:8px;flex-direction:column;gap:8px;">
+    <button class="btn amber-btn" onclick="tutorTryPractice()">Try a practice problem (no points needed)</button>
+    <button class="btn sec" onclick="teachMeAgain()">Teach me again</button>
+    <button class="btn sec" onclick="endTeachMeBox()">End this box for now</button>
+  </div>
   <div id="celebDiv" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(248,247,244,0.95);z-index:100;display:none;align-items:center;justify-content:center;flex-direction:column;">
     <div style="font-size:48px;margin-bottom:8px;">🎉</div>
     <div style="font-size:22px;font-weight:800;color:#1a4a8a;">All 9 done!</div>
@@ -3197,6 +3210,7 @@ async function openTopic(t){
     document.getElementById('submitBtn').style.display='none';
     document.getElementById('tierBar').style.display='none';
     document.getElementById('attemptBar').style.display='none';
+    document.getElementById('teachMeBtn').style.display='none';
     updCur(st=>{if(st.teacherFeedback&&st.teacherFeedback[t.id])st.teacherFeedback[t.id].read=true;});
     return;
   } else {
@@ -3205,6 +3219,7 @@ async function openTopic(t){
     document.getElementById('probOuter').style.display='';
     document.getElementById('submitBtn').style.display='flex';
     document.getElementById('tierBar').style.display='flex';
+    document.getElementById('teachMeBtn').style.display=session.practiceMode?'none':'block';
     // In practice mode show practice attempt count instead of assessment bar
   if(session.practiceMode){
     document.getElementById('attemptBar').style.display='flex';
@@ -3566,15 +3581,67 @@ function retryProblem(){
 }
 
 // ── AI Tutor ─────────────────────────────────────────────────
-async function startTutorSession(topic){
+async function startTutorSession(topic,teachMe){
   tutorTopic=topic;tutorHistory=[];
+  session.teachModeActive=!!teachMe;
   document.getElementById('tutorWrap').style.display='block';
   document.getElementById('tutorWrap').innerHTML='';
-  (((document.getElementById('tutorDoneBtn')||{style:{display:''}})||{style:{display:''}})||{style:{display:''}}).style.display='none';
-  (((document.getElementById('tutorInputArea')||{style:{display:''}})||{style:{display:''}})||document.getElementById('tutorWrap')).style.display='none';
+  document.getElementById('tutorDoneBtn').style.display='none';
+  document.getElementById('tutorTeachMeControls').style.display='none';
+  document.getElementById('tutorInputArea').style.display='none';
   const label=topicLabel(topic.id,cur().level);
-  await addTutorMsg(null,`I can see you were working hard on ${label}. Let\'s think about it together.`);
+  if(teachMe){
+    await addTutorMsg(null,`Let's learn ${label} together. This box won't count toward today's progress — take your time.`);
+  } else {
+    await addTutorMsg(null,`I can see you were working hard on ${label}. Let\'s think about it together.`);
+  }
   await askTutor(label);
+}
+
+// ── Teach Me This One (student-initiated, no progress credit) ──────────
+// Available any time during a problem, not just after 3 wrong attempts.
+// Borrows the existing practice-mode grading pipeline (unlimited attempts,
+// no day/streak advancement) so this never accidentally grants credit —
+// rather than inventing a second, untested no-credit code path.
+let _teachMePriorPracticeMode=false;
+function teachMeThisOne(){
+  if(!curTopic)return;
+  session.taughtNoCredit=session.taughtNoCredit||{};
+  session.taughtNoCredit[curTopic.id]=true;
+  _teachMePriorPracticeMode=!!session.practiceMode;
+  session.practiceMode=true; // reuse the tested "no credit, unlimited attempts" pipeline
+  document.getElementById('submitBtn').style.display='none';
+  document.getElementById('drawToolbar').style.display='none';
+  document.getElementById('probOuter').style.display='none';
+  document.getElementById('teachMeBtn').style.display='none';
+  startTutorSession(curTopic,true);
+}
+function teachMeAgain(){
+  document.getElementById('tutorTeachMeControls').style.display='none';
+  askTutor(topicLabel(tutorTopic.id,cur().level));
+}
+async function tutorTryPractice(){
+  document.getElementById('tutorTeachMeControls').style.display='none';
+  document.getElementById('tutorWrap').style.display='none';
+  document.getElementById('drawToolbar').style.display='flex';
+  document.getElementById('probOuter').style.display='';
+  // session.practiceMode is already true from teachMeThisOne() — openTopic()
+  // will correctly load this as an ungraded, unlimited-attempt problem.
+  await openTopic(curTopic);
+}
+function endTeachMeBox(){
+  session.teachModeActive=false;
+  session.practiceMode=_teachMePriorPracticeMode;
+  document.getElementById('tutorWrap').style.display='none';
+  document.getElementById('tutorTeachMeControls').style.display='none';
+  goToGrid();
+}
+function tutorReadyToTry(){
+  // Original (non-teach-me) path: after the auto-triggered tutor session,
+  // let the student retry the SAME box for real credit.
+  document.getElementById('tutorDoneBtn').style.display='none';
+  document.getElementById('tutorWrap').style.display='none';
+  if(curTopic)openTopic(curTopic);
 }
 async function askTutor(label){
   (((document.getElementById('tutorTyping')||{style:{display:''}})||{style:{display:''}})||{style:{display:''}}).style.display='flex';
@@ -3588,7 +3655,9 @@ There are three kinds of errors, and you diagnose out loud which one you're like
 2. Computational "oops" error — the method is right but a calculation slipped.
 3. New-content error — the student hasn't internalized this concept yet. This is the one that needs real teaching, not just a nudge.
 
-Go-to pattern: name the likely error type in one plain sentence, then ask the student to find it themselves. Example: "It looks like this might be a handwriting error — can you help me find it?" Collaborative, never blaming.
+Go-to pattern: name the likely error type in one plain sentence, then ask the student to find it themselves. Example: "This subtraction step looks like a handwriting slip — can you find it?" Collaborative, never blaming.
+
+Zero ambiguity in how you phrase things: avoid vague pronouns like "this," "that," or "it" standing in for something unnamed. Name the specific number, step, digit, or concept every time — say "the 7 in your answer" or "the subtraction step," not "that" or "it." Be as concrete and specific as the situation allows in every sentence.
 
 Timing matters: if what you're seeing is a handwriting or computational slip that would derail the main content if it continues, stop the student right there — note plainly that it looks like a small handwriting/computational error, and have them find it themselves, before it snowballs. But if it's a new-content/conceptual gap, don't short-circuit it — that is the real teaching moment, so let it play out through questions rather than cutting it off early.
 
@@ -3596,7 +3665,7 @@ When a student corrects themselves and gets it right, praise it specifically and
 
 Ask ONE short thing at a time. Never give the answer outright — for a new-content error, ask a question that exposes the specific gap rather than a vague "what do you notice." You believe in catching confusion early, so keep the tone light and ordinary, not heavy. Warm but efficient. Under 30 words.`;
   const hist=tutorHistory.length?tutorHistory:[{role:'user',content:'I need help.'}];
-  const resp=await callClaude(hist,sys,120).catch(()=>'Something looks like it slipped here — can you help me find it?');
+  const resp=await callClaude(hist,sys,120).catch(()=>'One step in your work looks off — can you check your steps and find it?');
   (((document.getElementById('tutorTyping')||{style:{display:''}})||{style:{display:''}})||{style:{display:''}}).style.display='none';
   await addTutorMsg('tutor',resp);
   tutorHistory.push({role:'assistant',content:resp});
@@ -3609,11 +3678,16 @@ async function sendTutorWork(){
   await addTutorMsg('student','[submitted written work]');
   tutorHistory.push({role:'user',content:desc});
   if(tutorHistory.length>=6){
-    (((document.getElementById('tutorTyping')||{style:{display:''}})||{style:{display:''}})||{style:{display:''}}).style.display='flex';
+    document.getElementById('tutorTyping').style.display='flex';
     await new Promise(r=>setTimeout(r,700));
-    (((document.getElementById('tutorTyping')||{style:{display:''}})||{style:{display:''}})||{style:{display:''}}).style.display='none';
-    await addTutorMsg('tutor',"You\'re thinking about this really well. Try the problem on your own now!");
-    (((document.getElementById('tutorDoneBtn')||{style:{display:''}})||{style:{display:''}})||{style:{display:''}}).style.display='block';
+    document.getElementById('tutorTyping').style.display='none';
+    if(session.teachModeActive){
+      await addTutorMsg('tutor',"You're thinking about this really well. Ready to try a practice problem, or want to keep going?");
+      document.getElementById('tutorTeachMeControls').style.display='flex';
+    } else {
+      await addTutorMsg('tutor',"You\'re thinking about this really well. Try the problem on your own now!");
+      document.getElementById('tutorDoneBtn').style.display='block';
+    }
     return;
   }
   await askTutor(topicLabel(tutorTopic.id,cur().level));
